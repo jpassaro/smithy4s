@@ -43,7 +43,9 @@ private[internals] object Renderer {
   case class Config(
       errorsAsScala3Unions: Boolean,
       wildcardArgument: String,
-      renderOptics: Boolean
+      renderOptics: Boolean,
+      packagePrefix: Option[String] = None,
+      packageSuffix: Option[String] = None,
   )
   object Config {
     def load(metadata: Map[String, Node]): Renderer.Config = {
@@ -64,6 +66,16 @@ private[internals] object Renderer {
         .map(_.getValue())
         .getOrElse(false)
 
+      val packagePrefix = metadata
+        .get("smithy4sPackagePrefix")
+        .flatMap(_.asStringNode().asScala)
+        .map(_.getValue)
+      val packageSuffix = metadata
+        .get("smithy4sPackageSuffix")
+        .flatMap(_.asStringNode().asScala)
+        .map(_.getValue)
+      
+
       if (wildcardArgument != "?" && wildcardArgument != "_") {
         throw new IllegalArgumentException(
           s"`smithy4sWildcardArgument` possible values are: `?` or `_`. found `$wildcardArgument`."
@@ -73,7 +85,9 @@ private[internals] object Renderer {
       Renderer.Config(
         errorsAsScala3Unions = errorsAsScala3Unions,
         wildcardArgument = wildcardArgument,
-        renderOptics = renderOptics
+        renderOptics = renderOptics,
+        packagePrefix = packagePrefix,
+        packageSuffix = packageSuffix,
       )
     }
   }
@@ -93,7 +107,7 @@ private[internals] object Renderer {
 
     val classes = unit.declarations.map { decl =>
       val renderResult = r.renderDecl(decl) ++ newline
-      val p = s"package ${unit.namespace}"
+      val p = s"package ${unit.packageName}"
 
       val segments = renderResult.list.flatMap(_.segments.toList)
       val localCollisions: Set[String] = segments
@@ -178,6 +192,11 @@ private[internals] class Renderer(compilationUnit: CompilationUnit) { self =>
   import compilationUnit.namespace
   import compilationUnit.rendererConfig.wildcardArgument
   import names._
+  val packageName = List(
+    compilationUnit.packagePrefix,
+    Some(namespace),
+    compilationUnit.packageSuffix,
+  ).flatten.mkString(".")
 
   def renderDecl(decl: Decl): Lines = decl match {
     case Service(shapeId, name, ops, hints, version) =>
@@ -265,13 +284,14 @@ private[internals] class Renderer(compilationUnit: CompilationUnit) { self =>
         lines(
           documentationAnnotation(hints),
           deprecationAnnotation(hints),
-          line"type $name = ${compilationUnit.namespace}.${name}.Type"
+          line"type $name = ${packageName}.${name}.Type"
         )
     }
+    val packageNameParts = packageName.split(".")
 
     val blk =
       block(
-        line"package object ${compilationUnit.namespace.split('.').last}"
+        line"package object ${packageNameParts.last}"
       )(
         compilationUnit.declarations.map(renderDeclPackageContents),
         newline,
@@ -279,7 +299,7 @@ private[internals] class Renderer(compilationUnit: CompilationUnit) { self =>
         newline
       )
 
-    val parts = compilationUnit.namespace.split('.').filter(_.nonEmpty)
+    val parts = packageNameParts.filter(_.nonEmpty)
     if (parts.size > 1) {
       lines(
         line"package ${parts.dropRight(1).mkString(".")}",
